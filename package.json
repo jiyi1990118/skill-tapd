@@ -23,11 +23,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git@github.com:xiyuan-code/skill-tapd.git"
+    "url": "git@github.com:jiyi1990118/skill-tapd.git"
   },
-  "homepage": "https://github.com/xiyuan-code/skill-tapd#readme",
+  "homepage": "https://github.com/jiyi1990118/skill-tapd#readme",
   "bugs": {
-    "url": "https://github.com/xiyuan-code/skill-tapd/issues"
+    "url": "https://github.com/jiyi1990118/skill-tapd/issues"
   },
   "files": [
     "skill.md",

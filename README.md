@@ -38,7 +38,7 @@ Claude:
 npm install -g @npm_xiyuan/skill-tapd
 
 # Or clone the repository
-git clone git@github.com:xiyuan-code/skill-tapd.git
+git clone git@github.com:jiyi1990118/skill-tapd.git
 cd skill-tapd
 ```
 
@@ -170,7 +170,7 @@ skill-tapd/
 Contributions are welcome! Please feel free to submit a Pull Request.
 
 ```bash
-git clone git@github.com:xiyuan-code/skill-tapd.git
+git clone git@github.com:jiyi1990118/skill-tapd.git
 cd skill-tapd
 # Make your changes
 git commit -m "feat: your feature"
@@ -179,7 +179,7 @@ git push
 
 ## 📝 License
 
-MIT © [xiyuan-code](https://github.com/xiyuan-code)
+MIT © [jiyi1990118](https://github.com/jiyi1990118)
 
 ## 🔗 Related Projects
 
@@ -188,9 +188,9 @@ MIT © [xiyuan-code](https://github.com/xiyuan-code)
 
 ## 💬 Community & Support
 
-- 🐛 [Report Issues](https://github.com/xiyuan-code/skill-tapd/issues)
-- 💡 [Feature Requests](https://github.com/xiyuan-code/skill-tapd/issues/new)
-- 📧 [Contact](https://github.com/xiyuan-code)
+- 🐛 [Report Issues](https://github.com/jiyi1990118/skill-tapd/issues)
+- 💡 [Feature Requests](https://github.com/jiyi1990118/skill-tapd/issues/new)
+- 📧 [Contact](https://github.com/jiyi1990118)
 
 ---
 
