@@ -1,0 +1,8 @@
+node_modules/
+*.log
+.DS_Store
+.env
+.audit-reports/
+OPTIMIZATION_REPORT.md
+OPTIMIZATION_COMPLETE.md
+AUDIT_REPORT.md

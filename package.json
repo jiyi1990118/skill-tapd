@@ -1,0 +1,38 @@
+{
+  "name": "@npm_xiyuan/skill-tapd",
+  "version": "1.0.0",
+  "description": "Professional TAPD Project Management Skill for Claude - AI-powered requirement analysis, sprint planning, bug triage with vision parsing",
+  "main": "skill.md",
+  "keywords": [
+    "claude",
+    "claude-skill",
+    "tapd",
+    "project-management",
+    "requirement-analysis",
+    "sprint-planning",
+    "bug-triage",
+    "vision-parser",
+    "ai-agent",
+    "mcp",
+    "productivity",
+    "agile",
+    "scrum",
+    "product-management"
+  ],
+  "author": "xiyuan-code",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:xiyuan-code/skill-tapd.git"
+  },
+  "homepage": "https://github.com/xiyuan-code/skill-tapd#readme",
+  "bugs": {
+    "url": "https://github.com/xiyuan-code/skill-tapd/issues"
+  },
+  "files": [
+    "skill.md",
+    "guides/",
+    "reference/",
+    "README.md"
+  ]
+}
