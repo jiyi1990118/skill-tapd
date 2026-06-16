@@ -1,9 +1,17 @@
 ---
 name: skill-tapd
-description: TAPD 项目管理工作流 - 需求分析、迭代规划、缺陷管理、进度跟踪
+description: TAPD 项目管理 - 需求/迭代/缺陷/任务管理，支持内容提取、状态流转、批量更新
 whenToUse: |
-  TAPD 项目管理任务：需求分析、迭代规划、bug 分诊、日报生成、需求跟踪、质量分析
-  触发词：需求分析、迭代规划、sprint、bug 分诊、日报、需求跟踪、质量分析
+  TAPD 项目管理：需求分析、迭代规划、bug分诊、日报、状态流转、内容提取
+  触发词：需求分析、迭代规划、sprint、bug分诊、日报、流转、提取、获取、搜索、评论、成员
+  触发模式：
+    - "提取/获取/查看 [需求] {URL}" → 提取+分析
+    - "{URL} 分析" → 提取+分析
+    - "提取...融合(不要修改)" → 原始内容+图片解析（一字不改）
+    - "07/22迭代的需求清单" → 匹配迭代→拉取→表格
+    - "流转 [需求] 为 开发中" → 查找→判断→更新
+    - "批量修改 [迭代] [状态] 为 [目标]" → 匹配→筛选→批量更新
+    - "[迭代] 技术评估→需求排期，规模=开发人数，处理人=开发人名，无开发人忽略" → 匹配→提取开发人→计算→批量更新(status+size+owner)
 ---
 
 # TAPD 项目管理 Skill
@@ -14,36 +22,10 @@ whenToUse: |
 
 ## 核心原则
 
-### 1. 信息完整性优先
-- ✅ 信息不足时，**必须澄清**，禁止臆造
-- ✅ 需求必须包含：业务目标、用户角色、使用场景、验收标准
-- ❌ 禁止创建不完整需求
-
-### 2. 图片内容解析 ⭐ 关键能力
-当获取 Story/Bug/Task 详情包含图片时，**必须执行 Vision Parser** 解析图片内容。
-
-**触发条件**：
-- `tapd_get_story/bug/task` 返回的 description 包含图片引用
-- 用户描述中提到"原型图"、"设计稿"、"截图"、"效果图"
-- 检测方法：description 中包含 `<img>`、图片URL、或 base64 图片数据
-
-**立即执行（3步）**：
-1. **读取快速规范**：`guides/vision-parser-quick.md`（核心原则+执行步骤）
-2. **执行解析**：按照标准输出格式，提取UI元素、文本、布局
-3. **补充到需求**：将解析结果添加到需求理解中
-
-**需要完整14部分解析？** 读取 `guides/vision-parser.md`
-
-**核心原则**（执行时牢记）：
-- 观察 > 解释（只描述可见内容，不推测意图）
-- 保留一切（所有文本、数字、UI元素、表格、图表）
-- 事实与推理分离（推理必须标记 `[Inference]`）
-- 无损编码（下游模型能通过输出重建原图）
-
-**TAPD场景特化**：
-- 原型图 → 重点提取：UI元素清单、交互流程、页面流转
-- Bug截图 → 重点提取：错误信息、环境信息、页面状态
-- 设计稿 → 重点提取：颜色、字体、尺寸标注、组件层级
+1. **信息完整**：不足时**必须澄清**，禁止臆造
+2. **图片解析**：description 含 `<img>` / 图片URL / base64 → 立即 Vision Parser（读 `guides/vision-parser-quick.md`）
+3. **写入确认**：create/update/delete 需用户确认，批量操作展示清单
+4. **先统计后详情**：count → list → get
 
 ### 3. 二次确认机制
 - ✅ 所有写入操作（create/update/delete）需用户明确确认
@@ -57,75 +39,89 @@ whenToUse: |
 
 ---
 
+## 状态流转规则 ⭐
+
+**原则**：只能向前流转，禁止向后回退。
+
+**Workspace 48801209 状态顺序**：
+```
+new → planned → tech_review → developing → testing → resolved → done → closed
+ 1       2           3            4           5          6         7        8
+```
+
+**流转判断**：目标状态位置 ≤ 当前位置 → 跳过；目标位置 > 当前位置 → 执行。
+
+**快捷流转**："完成需求"→`done`，"开始开发"→`developing`，"排期"→`planned`，"提测"→`testing`。
+
+**复杂批量**："[迭代] [状态]→[目标]，规模=开发人数，处理人=开发人名，无开发人忽略"
+- 从 description 提取开发人（正则：`开发人员[:：](.+)` / `负责人[:：](.+)` / `@名字` 等）
+- size=人数，owner=第一人，无开发人→跳过
+- 输出：✅更新 / ⚠️忽略(无开发人) / ❌跳过(方向不对)
+
+**确认清单**：确认状态顺序 → 获取当前状态 → 判断方向 → 展示清单 → 确认 → 执行 → 记录评论。
+
+---
+if user_confirms():
+    for item in can_update:
+        # 使用 tapd_update_story（单条更新，因为字段不同）
+        # 或使用 batch_update 如果所有字段相同
+        tapd_update_story(
+            workspace_id=workspace_id,
+            story_id=item['story'].id,
+            status=item['target_status'],
+            size=str(item['size']),
+            owner=item['owner']
+        )
+        
+        # 记录评论
+        tapd_create_comment(
+            workspace_id=workspace_id,
+            entry_type="stories",
+            entry_id=item['story'].id,
+            description=f"""批量字段更新：
+- 状态：{item['current_status']} → {item['target_status']}
+- 规模：{item['size']}（开发人员数量）
+- 处理人：{item['owner']}（开发人员）
+- 开发人员：{",".join(item['dev_names'])}"""
+        )
+    
+    print(f"✅ 成功更新 {len(can_update)} 个需求")
+    print(f"⚠️ 忽略 {len(skip_no_dev)} 个需求（无开发人员）")
+    print(f"❌ 跳过 {len(skip_transition)} 个需求（流转方向不对）")
+```
+
+**关键约束**：
+- 没有开发人员名字的需求 → **忽略不处理**（不是报错）
+- 规模字段（size）= 提取到的开发人员数量
+- 处理人（owner）= 取第一个开发人员名字（或按用户指定规则）
+- 流转方向判断仍然生效（向前流转才执行）
+- 批量操作中字段值可能不同（每个需求的开发人员不同），需逐个更新或使用 batch_update 分组
+
+---
+
+### 7. 流转执行前确认清单
+
+- [ ] 已确认目标 workspace 的状态顺序
+- [ ] 已获取需求当前状态
+- [ ] 已判断流转方向（向前/向后/同级）
+- [ ] 向后流转 → 输出跳过说明
+- [ ] 向前流转 → 展示变更清单 → 用户确认 → 执行
+
+---
+
 ## 工作流快速索引
 
-### 需求分析流程 ⭐ 最常用
-```
-1. 用户提出需求
-   ↓
-2. 【检测图片】→ Yes → 立即执行 Vision Parser（见下方"图片解析执行清单"）
-   ↓
-3. 【需求理解】明确6维度（Why/Who/When/Where/Value/Boundary/Done）
-   ↓
-4. 【完整性检查】缺失信息？→ Yes → 输出缺失清单 → 等待用户补充 → 返回步骤3
-   ↓ No
-5. 【需求拆解】Story → Module → Feature → Task
-   ↓
-6. 【验收标准】设计 Given/When/Then 格式
-   ↓
-7. 【用户确认】展示完整需求文档
-   ↓
-8. 【创建记录】tapd_create_story + tapd_create_task
-```
-
-**详细规范**：`guides/requirement-analysis.md`  
-**模板参考**：`guides/templates/requirement.md`
-
----
-
-### 迭代规划流程
-```
-1. tapd_list_iterations(status="open") → 获取开放迭代
-2. tapd_count_stories(iteration_id="<>") → 统计未分配需求
-3. tapd_list_stories(iteration_id="<>", limit=50) → 拉取列表
-4. 按 priority 排序 + 容量分析（团队人天 vs 需求工作量）
-5. 生成规划建议（建议纳入/不纳入 + 风险提示）
-6. 用户确认
-7. 批量执行：tapd_update_story(iteration_id="迭代X")
-```
-
-**详细规范**：`guides/workflows.md` → 迭代规划部分
-
----
-
-### Bug 分诊流程
-```
-1. tapd_count_bugs(status="new") → 统计概况
-2. tapd_list_bugs(status="new", limit=30) → 拉取列表
-3. 逐个分析：
-   - 有截图？→ Yes → 执行 Vision Parser（提取错误信息）
-   - 判断 severity（基于影响范围）→ fatal/serious/normal
-   - 判断 priority（基于业务优先级）→ urgent/high/medium
-   - 推荐 owner（基于 module）
-4. 展示分诊报告
-5. 用户确认
-6. 批量执行：tapd_update_bug(severity, priority, current_owner)
-```
-
-**详细规范**：`guides/workflows.md` → 缺陷管理部分
-
----
-
-### 日报生成流程
-```
-1. 计算时间：yesterday = today - 1天
-2. 查询昨日完成：tapd_list_stories/tasks/bugs(modified="昨天", status="done/resolved")
-3. 查询今日计划：tapd_list_stories/tasks(status="in_progress")
-4. 识别阻塞项：tapd_list_stories(priority="urgent|high", modified="<昨天")
-5. 格式化输出：📅 标题 + ✅ 昨日完成 + 🚀 今日计划 + ⚠️ 阻塞风险
-```
-
-**详细规范**：`guides/workflows.md` → 日报生成部分
+| 工作流 | 核心步骤 | 详细规范 |
+|---|---|---|
+| **需求分析** | 检测图片→Vision Parser→6维度理解→拆解→验收标准→创建 | `guides/requirement-analysis.md` |
+| **迭代规划** | list_iterations→count_stories→list_stories→排序→容量分析→批量分配 | `guides/workflows.md` 第一章 |
+| **Bug分诊** | count_bugs→list_bugs→Vision Parser(截图)→判断severity/priority→批量更新 | `guides/workflows.md` 第二章 |
+| **日报生成** | 计算时间→查昨日完成→查今日计划→识别阻塞→格式化输出 | `guides/workflows.md` 第三章 |
+| **状态流转** | 解析意图→查找需求→获取状态→判断方向→展示清单→确认→执行 | `guides/workflows.md` 第十章 |
+| **迭代清单** | 提取标识→list_iterations→模糊匹配→list_stories→表格展示 | `guides/workflows.md` 第九章 |
+| **搜索过滤** | 解析条件→count→list→表格展示 | `guides/workflows.md` 第十一章 |
+| **评论管理** | list_comments / create_comment（entry_type用复数：stories/bug/tasks） | `guides/workflows.md` 第十二章 |
+| **成员查找** | list_users→过滤→表格展示 | `guides/workflows.md` 第十三章 |
 
 ---
 
@@ -141,11 +137,23 @@ whenToUse: |
 - `tapd_list_comments` - 列出评论
 - `tapd_list_users` - 列出成员
 
+### 批量更新工具（高效优先）
+- `tapd_batch_update_stories` - 批量更新需求（分配迭代、修改优先级等）
+- `tapd_batch_update_bugs` - 批量更新缺陷（分诊后批量设置severity/priority）
+- `tapd_batch_update_tasks` - 批量更新任务（批量完成/分配）
+
+### 迭代管理
+- `tapd_lock_iteration` - 锁定迭代（防止修改）
+- `tapd_unlock_iteration` - 解锁迭代（允许修改）
+
 ### 写入工具（需二次确认）
 - `tapd_create_story/bug/task` - 创建记录
-- `tapd_update_story/bug/task` - 更新记录（增量更新）
-- `tapd_delete_story/bug/task` - 删除记录（实为状态变更）
-- `tapd_create_comment` - 添加评论
+- `tapd_update_story/bug/task` - 更新单个记录（增量更新）
+- `tapd_delete_story/bug/task` - 删除记录（实为设置status='deleted'）
+- `tapd_create_comment` - 添加评论（entry_type用复数：stories/bug/tasks）
+
+⚠️ **状态值映射**：不同 workspace 的状态值不同，修改状态前务必查阅 `reference/status-mapping.md`，切勿臆造状态值（如 `status_2`）。
+- 如需设置"需求排期"，先通过 `tapd_get_story` 确认参考需求的状态值
 
 ### 图片工具
 - `tapd_download_image` - 下载认证图片（已内嵌在详情中）
@@ -154,103 +162,100 @@ whenToUse: |
 
 ---
 
-## 需求分析六维度（核心）
+## 异常处理与边界情况
 
-执行需求分析时，**必须明确**以下六个维度：
+### 常见错误及应对
 
-### ✅ 业务目标（Why）
-- 要解决什么问题？
-- 预期带来什么价值？
-- 如何衡量成功？
+| 错误类型 | 表现 | 处理方式 |
+|---|---|---|
+| **401/403 权限不足** | 无法访问项目或执行操作 | 提示用户前往 TAPD 开放平台配置应用权限 |
+| **404 需求/迭代不存在** | 找不到指定的需求或迭代 | 检查 ID 是否正确，或列出候选让用户选择 |
+| **400 状态值无效** | 设置的状态不存在于该 workspace | 查询参考需求确认正确状态值 |
+| **网络超时** | API 无响应 | 重试一次，仍失败则提示稍后重试 |
+| **需求查找失败** | 按标题搜索无结果 | 建议用更精确的关键词、ID 或 URL |
+| **迭代匹配失败** | 找不到匹配的迭代 | 列出所有迭代让用户选择 |
+| **批量操作部分失败** | 部分需求更新成功，部分失败 | 汇总成功/失败列表，展示失败原因 |
 
-### ✅ 用户角色（Who）
-- 谁会使用？
-- 不同角色的需求差异？
+### 模糊匹配兜底策略
 
-### ✅ 使用场景（When & Where）
-- 用户在什么情况下使用？
-- 典型使用路径？
+```
+需求查找：
+  按标题搜索 → 0 条 → 提示用 ID 或 URL
+  按标题搜索 → 多条 → 展示候选列表让用户选择
+  按标题搜索 → 1 条 → 直接命中
 
-### ✅ 业务价值（Value）
-- 为什么现在做？
-- 优先级依据？
-
-### ✅ 边界条件（Boundary）
-- 范围内/范围外？
-- 约束条件？
-
-### ✅ 成功标准（Done）
-- 如何判断完成？
-- 验收标准？
-
-**如有任何维度信息缺失，必须输出缺失清单并要求用户补充。**
+迭代匹配：
+  模糊匹配 → 无结果 → 列出所有迭代
+  模糊匹配 → 1 条 → 直接命中
+```
 
 ---
 
-## 图片解析执行清单 ⭐
+## 需求分析六维度
 
-**何时执行**：检测到图片立即执行（不等待用户要求）
-
-**检测方法**：
-```python
-# description 包含以下任一标记
-has_image = (
-    "<img" in description or 
-    "http" in description and (".jpg" in description or ".png" in description) or
-    "base64" in description or
-    "原型图" in user_input or 
-    "设计稿" in user_input or
-    "截图" in user_input
-)
-```
-
-**执行流程（强制）**：
-```
-1. 读取 guides/vision-parser.md → 获取完整14部分解析标准
-2. 按标准执行 → 输出结构化JSON（14部分）
-3. 补充到需求 → 在需求理解中引用解析结果
-```
-
-**输出示例**：
-```markdown
-## 需求理解
-
-### 原型图解析结果
-- **UI元素**：登录按钮、用户名输入框、密码输入框、"记住我"复选框
-- **文本内容**：标题"用户登录"、按钮"立即登录"、链接"忘记密码？"
-- **布局关系**：标题居中、输入框垂直排列、按钮在底部
-- **交互流程**：输入账号密码 → 点击登录 → 跳转首页
-
-基于原型图，业务目标是：[推断业务目标]
-```
-
-**完整解析规范**：`guides/vision-parser.md`（14部分标准）
+Why（业务目标）、Who（用户角色）、When&Where（使用场景）、Value（业务价值）、Boundary（边界条件）、Done（成功标准）。**任一维度缺失，输出缺失清单要求补充。**
 
 ---
 
-## 从 TAPD URL 提取内容 ⭐ 通用场景
+## 图片解析
 
-### 支持的URL类型
-- Story（需求）：`https://www.tapd.cn/.../story/detail/...`
-- Bug（缺陷）：`https://www.tapd.cn/.../bug/bugs/view/...`
-- Task（任务）：`https://www.tapd.cn/.../task/...`
+**检测**：description 含 `<img>` / `.jpg|.png` / `base64` / 用户提到"原型图/设计稿/截图"。
+**执行**：读 `guides/vision-parser.md` → 按14部分标准解析 → 补充到需求理解。
 
-### 触发指令模式
+---
+
+## 从 TAPD URL 提取内容
+
+**支持**：story / bug / task URL。
+
+**模式**：
+- **A（分析）**："提取 {URL} 内容" → 提取 + 结构化展示 + 图片解析
+- **B（融合）**："提取...融合（不要修改）" → 原始内容 + 图片解析（一字不改，供下游使用）
+- **C（批量）**：多个 URL → 逐个提取
+- **D（对比）**："{URL1} vs {URL2}" → 对比差异
+
+**判断逻辑**：
 ```
-模式1：单个提取
-"帮我提取【标题】{URL} 的内容"
-"提取这个需求：{URL}"
+含 tapd.cn URL →
+  含"融合"/"不要修改" → 模式B（禁止修改）
+  含"对比"/"区别" → 模式D
+  多个URL → 模式C
+  其他 → 模式A
+```
 
-模式2：批量提取
+模式C：批量提取
 "提取以下需求的内容：{URL1} {URL2} {URL3}"
+"帮我看看这几个需求：{URL1} {URL2}"
 
-模式3：对比提取
+模式D：对比提取
 "对比这两个需求的差异：{URL1} vs {URL2}"
+"{URL1} 和 {URL2} 有什么区别"
+```
+
+### 指令意图快速识别
+
+当用户输入包含以下元素时，**立即触发提取流程**：
+1. **含 TAPD URL** → 无论前面说什么，先提取内容
+2. **关键词**：`获取`/`提取`/`查看`/`分析` + `需求`/`tapd`/`链接`/`内容`
+3. **URL 后直接跟指令**：`{URL} 分析一下`、`{URL} 帮我看看`
+4. **融合指令关键词**：`融合`/`合并`/`原始内容`/`不要修改`/`不要二次` → 触发模式B（一字不改）
+
+**判断逻辑**：
+```
+if 包含 tapd.cn URL:
+    if 包含 "融合" 或 "不要修改" 或 "原始":
+        → 模式B（提取+融合，禁止修改）
+    else if 包含 "对比" 或 "区别":
+        → 模式D（对比提取）
+    else if 多个URL:
+        → 模式C（批量提取）
+    else:
+        → 模式A（提取+分析）
 ```
 
 ### 通用执行规则 🔒
 
-#### 1. URL解析
+#### 1. URL解析（自动检测）
 ```python
 # 从URL提取关键信息
 import re
@@ -266,10 +271,68 @@ tool_map = {
 }
 ```
 
+**自动检测规则**：用户消息中只要包含 `tapd.cn` 域名 + `story/bug/task` 路径，**无论前面说什么**，都触发提取流程。
+
 #### 2. 内容提取原则
 - ✅ **完整性**：一字不改地提取所有内容
 - ✅ **原始性**：保留原文格式、结构、顺序
 - ❌ **禁止加工**：不修改、不总结、不优化
+
+#### 3. 模式B特殊规则：融合输出（一字不改）
+
+当用户明确要求"融合"、"不要二次修改"、"原始内容"时：
+
+```
+执行规则：
+1. 提取 story.description（原始文本，一字不改）
+2. 检测所有图片 → Vision Parser 解析
+3. 输出格式：原始内容 + 图片解析结果（原位插入）
+4. ❌ 禁止：总结、改写、添加分析、添加个人理解
+5. ✅ 允许：格式化排版、添加图片解析区块
+```
+
+**输出模板（模式B）**：
+```markdown
+# {需求名称}（原始内容）
+
+**需求ID**：{id}
+**状态**：{status}
+**优先级**：{priority}
+
+---
+
+## 需求描述（原文）
+
+{原始 description，一字不改}
+
+---
+
+## 图片内容解析
+
+### 图片1：{位置描述}
+**图片类型**：需求原型 | Bug截图 | 设计稿 | 流程图
+
+**UI元素**：
+- ...
+
+**文本内容（OCR）**：
+- "..."
+
+**布局关系**：
+- ...
+
+---
+
+## 自定义字段（如有）
+
+...
+```
+
+**关键约束**：
+- `description` 字段原文**必须完整保留**，不得删减
+- 图片解析结果以**追加区块**形式放在后面，不替换原文
+- 不添加"需求理解"、"分析"、"建议"等二次加工内容
+- 输出目的是**供下游模型/人工进一步处理使用**
 
 #### 3. 图片处理（统一规则）
 
@@ -325,7 +388,7 @@ for match in re.finditer(r'(<img.*?>|!\[.*?\]\(.*?\))', description):
 
 ### 场景特化处理
 
-#### 场景A：提取Story（需求）
+#### 场景A：提取Story（需求）- 标准分析模式
 ```python
 story = tapd_get_story(workspace_id, story_id)
 
@@ -352,6 +415,74 @@ output = f"""
 ## 自定义字段
 
 {format_custom_fields(story)}
+"""
+```
+
+#### 场景A+：提取Story（需求）- 融合模式（一字不改）
+当用户要求"融合"、"不要修改"、"供下游使用"时：
+
+```python
+story = tapd_get_story(workspace_id, story_id)
+
+# 步骤1：提取原始内容（一字不改）
+raw_description = story.description  # 完整保留，不处理
+
+# 步骤2：检测图片并解析
+images = extract_images(raw_description)
+vision_results = []
+for img in images:
+    vision_results.append({
+        'url': img.url,
+        'position': img.position,
+        'result': vision_parse(img.url)  # Vision Parser
+    })
+
+# 步骤3：输出（原始内容 + 图片解析区块）
+output = f"""
+# {story.name}（原始内容）
+
+**需求ID**：{story.id}
+**状态**：{story.status}
+**优先级**：{story.priority}
+
+---
+
+## 需求描述（原文，未修改）
+
+{raw_description}
+
+---
+
+## 图片内容解析（供参考）
+"""
+
+for vr in vision_results:
+    output += f"""
+### 📸 图片：{vr['url']}
+
+**UI元素**：
+{format_ui_elements(vr['result'])}
+
+**文本内容（OCR）**：
+{format_ocr_text(vr['result'])}
+
+**布局关系**：
+{format_layout(vr['result'])}
+
+---
+"""
+
+output += f"""
+## 元数据
+
+**负责人**：{story.owner}
+**创建人**：{story.creator}
+**创建时间**：{story.created}
+**迭代**：{story.iteration_id or '未分配'}
+
+---
+⚠️ 以上内容中"需求描述"为 TAPD 原文，未做任何修改。
+图片解析结果仅供参考，供下游处理使用。
 """
 ```
 
@@ -434,154 +565,172 @@ print("\n### 差异分析")
 print(compare_contents(content1, content2))
 ```
 
-### 输出质量检查清单
+---
 
-提取完成后，验证：
-- [ ] URL解析正确（workspace_id + entity_id）
-- [ ] 原文完整（无遗漏字段）
-- [ ] 格式未破坏（段落、列表、表格）
-- [ ] 图片已检测（所有图片都找到）
-- [ ] 图片解析已插入原位（紧跟图片）
-- [ ] 标识清晰（使用📸 emoji + 分隔线）
-- [ ] 无二次加工（原文一字不改）
+## 迭代需求清单智能提取 ⭐ 新增强
+
+**一句话指令，多步骤自动执行。**
+
+### 触发指令（极简表达 → 智能推断）
+
+| 用户说法 | AI 理解 | 执行步骤 |
+|---|---|---|
+| "帮我获取 07/22 迭代的需求清单" | 找到名字/日期含"07/22"的迭代 → 拉取其需求列表 | 1. 列出迭代 2. 模糊匹配 3. 拉取需求 4. 表格展示 |
+| "看看本周迭代有什么需求" | 找到当前开放迭代 → 列出需求 | 1. 列出开放迭代 2. 拉取需求 3. 表格展示 |
+| "Sprint 5 有哪些需求" | 找到名字含"Sprint 5"的迭代 → 列出需求 | 1. 列出迭代 2. 模糊匹配 3. 拉取需求 4. 表格展示 |
+| "7月份迭代的需求列表" | 找到 7 月份相关的迭代 → 列出需求 | 1. 列出迭代 2. 日期匹配 3. 拉取需求 4. 表格展示 |
+| "当前迭代有哪些需求没完成" | 找到当前开放迭代 → 列出未完成需求 | 1. 列出开放迭代 2. 过滤状态 3. 表格展示 |
+| "这个迭代的需求" | 找到最近/唯一的开放迭代 → 列出需求 | 1. 列出迭代 2. 取最近一个 3. 拉取需求 4. 表格展示 |
+
+### 执行流程（自动推断）
+
+```python
+def extract_iteration_needs(user_input, workspace_id):
+    """
+    一句话提取迭代需求清单
+    """
+    # Step 1: 提取用户提到的迭代标识
+    iteration_hint = extract_iteration_hint(user_input)
+    # 示例: "07/22" → hint="07/22"
+    # 示例: "本周" → hint="current_week"
+    # 示例: "Sprint 5" → hint="Sprint 5"
+    # 示例: "7月份" → hint="2026-07"
+    # 示例: "当前" → hint="current"
+
+    # Step 2: 获取迭代列表
+    iterations = tapd_list_iterations(workspace_id=workspace_id, limit=50)
+
+    # Step 3: 模糊匹配目标迭代
+    target_iteration = fuzzy_match_iteration(iterations, iteration_hint)
+
+    if not target_iteration:
+        return format_iteration_list(iterations)
+
+    # Step 4: 拉取需求列表
+    stories = tapd_list_stories(
+        workspace_id=workspace_id,
+        iteration_id=target_iteration.id,
+        limit=200,
+        fields="id,name,status,owner,priority,creator,created,modified,begin,due,size,description"
+    )
+
+    # Step 5: 表格展示
+    return format_stories_table(stories, target_iteration)
+```
+
+### 模糊匹配规则
+
+匹配优先级：名称包含 → 日期包含 → 数字匹配 → 当前周 → 月份匹配 → 最近open → 最近任意。
+
+### 表格展示
+
+```markdown
+## 📋 迭代需求清单 - {iteration.name}
+
+| 序号 | 需求ID | 需求名称 | 状态 | 优先级 | 负责人 | 规模 | 创建人 | 创建时间 |
+|------|--------|----------|------|--------|--------|------|--------|----------|
+| ... | ... | ... | ... | ... | ... | ... | ... | ... |
+
+**统计**: 总数{total} | 开发中{developing} | 已完成{done} | 未开始{planned} | 高优{high_priority}
+```
+
+### 自然表达对照
+
+| 用户说 | 匹配策略 |
+|---|---|
+| "07/22 迭代" | 名称/日期含 07/22 |
+| "本周迭代" | open + 日期含今天 |
+| "Sprint 5" | 名称含 Sprint 5 |
+| "7月份" | startdate 含 2026-07 |
+| "最近的迭代" | 最近的 open |
+| "这个迭代" | 唯一的或最近的 open |
 
 ---
 
 ## Agent 禁止行为
 
-### ❌ 禁止臆造需求信息
-- 不猜测用户意图
-- 不补充未提供的业务规则
-- 不假设验收标准
-
-### ❌ 禁止跳过需求澄清
-- 信息不完整时不直接生成方案
-- 验收标准缺失时不创建需求
-
-### ❌ 禁止创建不完整需求
-- 无验收标准不创建
-- 无业务目标不创建
-
-### ❌ 禁止覆盖原始内容
-- 不用 Agent 内容替换用户输入
-- 不删除用户已写入信息
-- 通过评论补充或增量更新
+- ❌ 不臆造需求信息、不猜测意图、不补充未提供规则
+- ❌ 不跳过需求澄清、信息不完整不生成方案
+- ❌ 不创建不完整需求（无验收标准/无业务目标不创建）
+- ❌ 不覆盖原始内容（增量更新、通过评论补充）
 
 ---
 
 ## 使用示例
 
-### 示例 1：需求分析（含图片）
+**示例1：需求分析（含图片）**
 ```
 用户：帮我分析这个需求，这是原型图 [图片]
-
-Agent：
-1. 读取 guides/vision-parser.md
-2. 执行图片解析（提取所有 UI 元素、文本、布局）
-3. 执行需求理解（6 维度）
-4. 检查信息完整性
-5. 如有缺失，输出缺失清单
-6. 用户补充后，执行需求拆解
-7. 生成验收标准
-8. 创建 TAPD 记录
+Agent：1. Vision Parser → 2. 6维度理解 → 3. 完整性检查 → 4. 拆解 → 5. 验收标准 → 6. 创建记录
 ```
 
-### 示例 2：迭代规划
+**示例2：迭代规划**
 ```
 用户：帮我规划 Sprint 5
-
-Agent：
-1. tapd_list_iterations(status="open")
-2. tapd_count_stories(iteration_id="")
-3. tapd_list_stories(iteration_id="", limit=30)
-4. 按 priority 排序
-5. 计算容量（读取 guides/workflows.md）
-6. 生成规划建议
-7. 用户确认后批量更新
+Agent：1. list_iterations(open) → 2. count_stories(未分配) → 3. list_stories → 4. 排序 → 5. 容量分析 → 6. 生成建议 → 7. 批量分配
 ```
 
-### 示例 3：Bug 分诊（含截图）
+**示例3：Bug分诊（含截图）**
 ```
 用户：帮我分诊这个 Bug [截图]
-
-Agent：
-1. 读取 guides/vision-parser.md
-2. 执行图片解析（提取错误信息、UI 状态、环境信息）
-3. 分析 severity（基于影响范围）
-4. 分析 priority（基于业务优先级）
-5. 推荐 owner（基于 module）
-6. 展示分诊报告
-7. 用户确认后创建/更新 Bug
+Agent：1. Vision Parser → 2. 分析severity/priority → 3. 推荐owner → 4. 展示报告 → 5. 批量更新
 ```
 
 ---
 
 ## 详细参考文档
 
-当需要详细规范时，按需读取以下文件：
-
-### 指南（Guides）
-- `guides/requirement-analysis.md` - 需求分析专业规范（需求理解、澄清、拆解、验收标准设计）
-- `guides/workflows.md` - 最佳实践工作流（迭代规划、缺陷处理、需求变更、版本发布）
-- `guides/templates.md` - Prompt 模板（需求分析、用户故事、任务拆解、缺陷分析、需求评审）
-- `guides/vision-parser.md` - 图片解析完整规范（Lossless Visual Encoder）
-
-### 参考（Reference）
-- `reference/mcp-capabilities.md` - MCP 能力详解（工具列表、查询语法、字段说明、协作链路）
-- `reference/tapd-scenarios.md` - TAPD 场景适配（7 大场景的业务目标、MCP 调用、输入输出规范）
-- `reference/tool-reference.md` - 工具速查表
+- `guides/requirement-analysis.md` - 需求分析规范
+- `guides/workflows.md` - 工作流最佳实践
+- `guides/templates.md` - Prompt模板
+- `guides/vision-parser.md` - 图片解析规范
+- `reference/mcp-tools.md` - MCP工具参考
+- `reference/status-mapping.md` - 状态值映射
 
 ---
 
 ## 快速决策树
 
-### 我应该做什么？
 ```
-用户提到需求/想法？
-  ↓ Yes
-执行需求分析流程
-  有图片？ → Yes → 执行 Vision Parser
-  ↓ No
-需求信息完整？
-  ↓ No
-输出缺失清单，要求补充
-  ↓ Yes
-需求拆解 → 验收标准 → 用户确认 → 创建记录
-```
-
-```
-用户提到迭代规划/Sprint？
-  ↓ Yes
-读取 guides/workflows.md（迭代规划流程）
-  ↓
-tapd_list_iterations + tapd_count_stories
-  ↓
-生成规划建议 → 用户确认 → 批量分配
-```
-
-```
-用户提到 Bug 分诊？
-  ↓ Yes
-tapd_list_bugs(status="new")
-  有截图？ → Yes → 执行 Vision Parser
-  ↓
-分析 severity/priority/owner
-  ↓
-展示分诊报告 → 用户确认 → 批量更新
-```
-
-```
-用户提到日报/进度？
-  ↓ Yes
-读取 guides/workflows.md（日报生成流程）
-  ↓
-查询昨日完成 + 今日计划 + 阻塞项
-  ↓
-格式化输出日报
+用户提到需求/想法？ → 需求分析流程 → 有图片？Vision Parser → 完整？拆解→验收→创建
+用户提到迭代规划/Sprint？ → list_iterations + count_stories → 规划建议 → 批量分配
+用户提到"迭代需求"/"Sprint需求"/"本周需求"？ → 提取标识→匹配迭代→list_stories→表格
+用户提到Bug分诊？ → list_bugs(new) → 有截图？Vision Parser → 分析severity/priority/owner → 批量更新
+用户提到日报/进度？ → 查昨日完成+今日计划+阻塞项 → 格式化输出
+用户提到"流转"/"修改状态"/"状态改为"/"批量修改"？ → 解析→获取状态→判断方向→展示→确认→执行
+用户提到"搜索"/"查找"/"过滤"+需求？ → 解析条件→count→list→表格
+用户提到"评论"/"讨论记录"？ → 查看list_comments / 添加create_comment
+用户提到"成员"/"负责人"/"团队成员"？ → list_users→过滤→表格
 ```
 
 ---
 
-**版本**：v2.0.0 (模块化)  
-**最后更新**：2026-06-12  
-**核心文件**：skill.md（本文件）+ guides/ + reference/
+**版本**：v2.6.0 (复杂批量字段更新：状态流转+动态字段提取+条件忽略)  
+**最后更新**：2026-06-16  
+**核心文件**：skill.md + guides/ + reference/
+
+---
+
+## 变更日志
+
+### v2.6.0 (2026-06-16)
+- ✅ 新增复杂批量字段更新：状态流转+从description动态提取开发人+计算size/owner+无开发人忽略
+- ✅ 新增触发词：规模、开发人员、处理人员、字段更新
+
+### v2.5.0 (2026-06-16)
+- ✅ 修复结构断裂、新增异常处理规范、快捷流转指令、修复日报状态值、新增搜索/评论/成员工作流
+
+### v2.4.0 (2026-06-16)
+- ✅ 新增状态流转智能判断（只能向前，禁止回退）、单个/批量需求流转工作流
+
+### v2.3.0 (2026-06-16)
+- ✅ 新增迭代需求清单智能提取（一句话指令→多步骤执行→表格展示）
+
+### v2.2.0 (2026-06-16)
+- ✅ 同步MCP需求状态、新增融合模式（一字不改输出）
+4. 分析 priority（基于业务优先级）
+5. 推荐 owner（基于 module）
+6. 展示分诊报告
+7. 用户确认后创建/更新 Bug
+```
+

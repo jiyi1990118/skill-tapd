@@ -7,8 +7,15 @@
 | 统计数据 | `tapd_count_*` | ⭐⭐⭐ 优先使用 |
 | 列表查询 | `tapd_list_*` | ⭐⭐ 按需使用 |
 | 详情查询 | `tapd_get_*` | ⭐ 必要时使用 |
+| 批量更新 | `tapd_batch_update_*` | ⭐⭐⭐ 优先使用 |
 | 创建记录 | `tapd_create_*` | 需二次确认 |
 | 更新记录 | `tapd_update_*` | 需二次确认 |
+| 删除记录 | `tapd_delete_*` | 需二次确认 |
+
+> **批量更新 vs 单条更新**：
+> - 批量更新多个需求/缺陷/任务 → 使用 `tapd_batch_update_*`（更高效）
+> - 更新单个记录 → 使用 `tapd_update_*`
+> - 删除记录 → 使用 `tapd_delete_*`（实为设置 `status='deleted'`）
 
 ---
 
@@ -56,8 +63,48 @@ tapd_list_stories(workspace_id="123", iteration_id="<>", priority="urgent|high",
 **推荐**：`description`, `priority`, `owner`, `iteration_id`, `begin`, `due`
 
 ### tapd_update_story
-**用途**：更新需求（增量）  
+**用途**：更新单个需求（增量）  
 **原则**：只更新变化字段，不覆盖原始内容
+
+⚠️ **状态值映射**：修改 `status` 前，务必查阅 `reference/status-mapping.md`。不同 workspace 的状态值不同，切勿臆造。
+
+**Workspace 48801209 已验证的状态值**：
+| 中文状态 | API 值 | 说明 |
+|---|---|---|
+| 需求排期 | `planned` | 已排期待开发 |
+| 开发中 | `developing` | 正在开发实现 |
+| 初始/新建 | `status_1` | 刚创建时的状态 |
+
+**通用做法**：先通过 `tapd_get_story` 查询一个处于目标状态的参考需求，确认其 `status` 字段值后再更新。切勿臆造（如 `status_2` 不等于"需求排期"）。
+
+### tapd_batch_update_stories
+**用途**：批量更新多个需求（相同字段值）  
+**场景**：批量分配迭代、批量修改优先级、批量修改状态  
+**效率**：比循环调用 `tapd_update_story` 更高效
+
+**参数**：
+- `workspace_id` (必填)
+- `story_ids` (必填) - 逗号分隔的ID，如 `"123,456,789"`
+- `status`, `owner`, `priority`, `iteration_id` - 要批量设置的字段
+
+⚠️ **状态值注意事项**：同 `tapd_update_story`，修改 `status` 前务必查阅 `reference/status-mapping.md` 确认正确值。
+
+**示例**：
+```python
+# 批量分配迭代
+tapd_batch_update_stories(
+    workspace_id="123",
+    story_ids="101,102,103",
+    iteration_id="迭代5"
+)
+
+# 批量修改优先级
+tapd_batch_update_stories(
+    workspace_id="123",
+    story_ids="101,102",
+    priority="high"
+)
+```
 
 ### tapd_delete_story
 **用途**：删除需求（实为status='deleted'）  
@@ -96,7 +143,28 @@ tapd_list_stories(workspace_id="123", iteration_id="<>", priority="urgent|high",
 **推荐**：`description`, `severity`, `priority`, `current_owner`, `module`, `platform`
 
 ### tapd_update_bug
-**用途**：Bug分诊，更新 severity/priority/current_owner
+**用途**：Bug分诊，更新单个缺陷的 severity/priority/current_owner
+
+### tapd_batch_update_bugs
+**用途**：批量更新多个缺陷（相同字段值）  
+**场景**：Bug分诊后批量设置 severity/priority/owner
+
+**参数**：
+- `workspace_id` (必填)
+- `bug_ids` (必填) - 逗号分隔的ID
+- `status`, `current_owner`, `severity`, `priority`
+
+**示例**：
+```python
+# Bug分诊后批量更新
+tapd_batch_update_bugs(
+    workspace_id="123",
+    bug_ids="456,457,458",
+    severity="serious",
+    priority="high",
+    current_owner="张三"
+)
+```
 
 ---
 
@@ -110,6 +178,19 @@ tapd_list_stories(workspace_id="123", iteration_id="<>", priority="urgent|high",
 
 **必填**：`workspace_id`, `name`  
 **推荐**：`description`, `owner`, `priority`, `iteration_id`, `begin`, `due`
+
+### tapd_update_task / tapd_batch_update_tasks
+用法同 Story/Bug
+
+**示例**：
+```python
+# 批量更新任务状态
+tapd_batch_update_tasks(
+    workspace_id="123",
+    task_ids="201,202,203",
+    status="done"
+)
+```
 
 ---
 
@@ -125,18 +206,50 @@ tapd_list_iterations(workspace_id="123", status="open")
 ### tapd_get_iteration
 **返回**：id, name, status, startdate, enddate, description
 
+### tapd_lock_iteration / tapd_unlock_iteration
+**用途**：锁定/解锁迭代  
+**场景**：迭代结束后防止误修改
+
+**注意**：
+- 锁定后迭代内的需求、缺陷、任务将不可编辑
+- 需要特殊应用权限，如遇403错误请联系项目管理员配置
+
+```python
+# 锁定迭代
+tapd_lock_iteration(workspace_id="123", iteration_id="迭代5")
+
+# 解锁迭代
+tapd_unlock_iteration(workspace_id="123", iteration_id="迭代5")
+```
+
 ---
 
 ## 五、协作工具
 
-### tapd_list_comments
-**参数**：`workspace_id`, `entry_type`(story|bug|task), `entry_id`, `limit`, `page`
+### tapd_list_comments / tapd_create_comment
+**参数**：`workspace_id`, `entry_type`, `entry_id`, `description`
 
-### tapd_create_comment
-**用途**：记录讨论和变更
+⚠️ **entry_type 必须使用复数形式**：
+- `story` → `stories`
+- `bug` → `bug`（单复数同形）
+- `task` → `tasks`
 
 ```python
-tapd_create_comment(workspace_id="123", entry_type="story", entry_id="456", description="已评审通过")
+# 为需求添加评论
+tapd_create_comment(
+    workspace_id="123",
+    entry_type="stories",  # 注意：stories 不是 story
+    entry_id="456",
+    description="已评审通过"
+)
+
+# 为缺陷添加评论
+tapd_create_comment(
+    workspace_id="123",
+    entry_type="bug",
+    entry_id="789",
+    description="复现步骤已验证"
+)
 ```
 
 ### tapd_list_users
@@ -145,9 +258,34 @@ tapd_create_comment(workspace_id="123", entry_type="story", entry_id="456", desc
 ### tapd_list_workspaces / tapd_get_workspace
 **用途**：工作区管理
 
+⚠️ **权限限制**：部分工作区API需要特殊权限，如遇403错误请联系项目管理员配置
+
 ---
 
-## 六、查询语法
+## 六、其他工具
+
+### tapd_download_image
+**用途**：下载需要认证的TAPD图片（如原型图、截图）  
+**场景**：描述中包含 `<img>` 标签的图片URL
+
+### Webhook 管理（本地存储）
+⚠️ **重要**：TAPD Open API 不提供 Webhook 管理端点。MCP 中的 Webhook 工具仅操作**本地内存存储**，用于记录配置信息。
+
+**实际配置方式**：
+- 需通过 TAPD 网页界面配置 Webhook
+- 地址：`https://www.tapd.cn/help/view#1120003271001002318`
+
+### Label 标签管理
+⚠️ **重要**：TAPD 没有独立的 `/labels` API 端点。
+
+**标签使用方式**：
+- 通过需求/缺陷/任务的 `label` 字段直接管理
+- 多个标签用 `|` 分隔：`label="紧急|前端|迭代5"`
+- 首次使用时会自动创建
+
+---
+
+## 七、查询语法
 
 ### 时间范围
 ```python
@@ -243,5 +381,6 @@ A: 在 Task 的 description 中引用 Story ID
 
 ---
 
-**版本**：v2.0.0  
-**最后更新**：2026-06-12
+**版本**：v2.2.0  
+**最后更新**：2026-06-16  
+**变更**：同步 MCP 状态值（planned、developing、status_1）
