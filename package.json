@@ -1,6 +1,6 @@
 {
   "name": "@npm_xiyuan/skill-tapd",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Professional TAPD Project Management Skill for Claude - AI-powered requirement analysis, sprint planning, bug triage with vision parsing",
   "main": "skill.md",
   "keywords": [
