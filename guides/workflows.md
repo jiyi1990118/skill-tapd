@@ -889,9 +889,16 @@ stats = {
 
 ## 十、状态流转工作流
 
-### 核心原则：只能向前流转，禁止向后回退
+### 核心原则
 
-**判断逻辑**：目标状态位置 ≤ 当前位置 → 跳过；目标位置 > 当前位置 → 执行。
+**原则 1**：只能向前流转，禁止向后回退。
+
+**原则 2（默认前置）**：状态变更前，需求**必须**有明确的开发人员，否则忽略。
+
+**判断逻辑**：
+- 目标状态位置 ≤ 当前位置 → 跳过
+- 目标状态位置 > 当前位置 → 进入下一步
+- **`has_developer(description) == False` → ⚠️ 忽略，不进入确认清单**
 
 **Workspace 48801209 状态顺序**：
 ```python
@@ -905,20 +912,25 @@ STATUS_MAP = {'新建':'status_1', '需求排期':'planned', '技术评估':'tec
 **触发**："流转 [需求] 为 [状态]"
 
 **流程**：
-1. 提取需求标识（标题/ID/URL）→ 查找需求
+1. 提取需求标识（标题/ID/URL）→ `tapd_get_story` 获取需求详情（含 description）
 2. 提取目标状态 → 映射为 API 值
-3. 流转判断：目标位置 > 当前位置？
-4. 展示确认 → 执行 `tapd_update_story(status=target)` → 记录评论
+3. **调用 `has_developer(description)` 判断是否有开发人员**
+   - 无开发人员 → ⚠️ 提示"该需求无开发人员标注，按规则忽略"，**不执行**
+   - 有开发人员 → 继续
+4. 流转判断：目标位置 > 当前位置？
+   - 目标 ≤ 当前位置 → 提示"禁止回退"，跳过
+5. 展示确认 → 执行 `tapd_update_story(status=target)` → 记录评论
 
 ### 场景 B：批量迭代需求流转
 
 **触发**："批量修改 [迭代] [状态] 为 [目标状态]"
 
 **流程**：
-1. 模糊匹配迭代 → `list_stories(iteration_id, status=filter)`
-2. 逐个判断流转方向
-3. 展示：✅ 将流转的 / ❌ 将跳过的
-4. 确认 → `batch_update_stories(story_ids, status=target)` → 记录评论
+1. 模糊匹配迭代 → `list_stories(iteration_id, status=filter, fields="...,description")`
+2. **逐个调用 `has_developer(description)` 过滤无开发人员的需求**
+3. 剩余需求逐个判断流转方向
+4. 展示三类清单：✅ 将流转的 / ⚠️ 忽略(无开发人) / ❌ 将跳过的(方向不对)
+5. 确认 → `batch_update_stories(story_ids, status=target)` → 记录评论
 
 ### 场景 C：批量流转 + 字段更新（规模 + 负责人）
 
@@ -928,21 +940,54 @@ STATUS_MAP = {'新建':'status_1', '需求排期':'planned', '技术评估':'tec
 1. 匹配迭代 → 拉取指定状态的需求（含 description）
 2. 逐个处理：
    - 流转判断 → 向后/同级则跳过
-   - 从 description 提取开发人（正则：`开发人员[:：](.+)` / `负责人[:：](.+)` / `@名字` / `developer: name`）
-   - 无开发人 → ⚠️ 忽略
+   - **`has_developer(description)` 校验 → 无开发人 → ⚠️ 忽略**
    - 有开发人 → size=人数，owner=第一人
 3. 展示三类清单：✅ 更新 / ⚠️ 忽略(无开发人) / ❌ 跳过(方向不对)
 4. 确认 → 逐个 `update_story(status, size, owner)`（字段值不同，无法 batch）→ 记录评论
 
-**提取开发人正则**：
+### 开发人员判断工具函数
+
 ```python
-patterns = [
-    r'开发人员[：:]\s*([一-龥\w\s、,，/|]+)',
-    r'负责人[：:]\s*([一-龥\w\s、,，/|]+)',
-    r'developer[s]?[：:]\s*([\w\s,，/|]+)',
-    r'@([一-龥\w]+)',
+import re
+
+DEV_PATTERNS = [
+    r'开发人员[：:]\s*([一-龥\w\s、,，/|]+?)(?=\n|;|；|$|（|\(|\s{2,})',
+    r'负责人[：:]\s*([一-龥\w\s、,，/|]+?)(?=\n|;|；|$|（|\(|\s{2,})',
+    r'developer[s]?[：:]\s*([\w\s,，/|]+?)(?=\n|;|;|$|\(|\s{2,})',
+    r'@([一-龥]{2,4})',
 ]
+
+def has_developer(description: str) -> tuple[bool, list[str]]:
+    """
+    判断需求是否有开发人员。
+    从 description 文本中匹配 DEV_PATTERNS，命中即视为有开发人员。
+
+    返回: (是否有开发人员, 提取到的开发人列表)
+    """
+    devs = set()
+    for pat in DEV_PATTERNS:
+        for m in re.finditer(pat, description or ''):
+            names = re.split(r'[、,，/|;\s]+', m.group(1).strip())
+            devs.update(n.strip() for n in names if n.strip() and len(n.strip()) >= 2)
+    return (len(devs) > 0, list(devs))
+
+
+def filter_with_developer(stories: list) -> tuple[list, list]:
+    """
+    批量过滤：返回 (有开发人员的需求, 无开发人员的需求)
+    """
+    with_dev, without_dev = [], []
+    for s in stories:
+        has, _ = has_developer(s.get('description', ''))
+        (with_dev if has else without_dev).append(s)
+    return with_dev, without_dev
 ```
+
+**重要提示**：
+- ❌ **不要用 `owner` 字段判断**——owner 是历史处理人，可能是已离职/转岗人员
+- ✅ **必须用 description 中的 `开发人员`/`负责人`/`@名字` 标注**
+- ⚠️ `@对接人`（如 @吴栋、@王登林）会被识别为开发人员，若非实际开发人需人工事后复核
+- 命中文本中提到的任何 `@名字` 都视为有开发人员，可能误判，但比漏判更安全
 
 ### 流转场景速查
 
